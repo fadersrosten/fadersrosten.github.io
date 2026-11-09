@@ -303,9 +303,12 @@ const SHOW = {
 };
 const EN_MOSES = ["","Gen","Exod","Lev","Num","Deut"];
 const BOOKRE = /^\s*([1-5])?\s*\.?\s*([A-Za-zÅÄÖØÆåäöøæ]+)\.?\s*(.*)$/;
+// Johannes' åpenbaring: forkortelser og fulle navn på alle språk blir til «Upp»
+const REV_RE = /^\s*(?:joh(?:annes|anneksen)?['’]?s?\.?\s+)?(?:åpenbaring(?:en|sboken)?|åpb?|upp(?:b|enbarelse(?:n|boken)?)?|ilm(?:estys(?:kirja)?)?|revelations?|rev)(?!\p{L})\.?/iu;
+const NEAR = {no:"Ingen treff på akkurat disse versene. Samme kapittel:",sv:"Inga träffar på just dessa verser. Samma kapitel:",fi:"Ei osumia juuri näille jakeille. Sama luku:",en:"No results for those exact verses. Same chapter:"};
 
 function parseRef(s){
-  const m = String(s).match(BOOKRE);
+  const m = String(s).replace(REV_RE, "Upp ").match(BOOKRE);
   if (!m) return null;
   const w = m[2].toLowerCase();
   if (MOSES[w] && !m[1]) return {num:MOSES[w], book:"mos", rest:m[3]};
@@ -338,11 +341,12 @@ function parseBibleQuery(s){
   if (!m[2] && ONE_CHAPTER.has(r.num + r.book)) { q.v1 = q.v2 = q.c; q.c = 1; }
   return q;
 }
+const sameBook = (k, q) => q.num ? k === q.num + q.book : (k === q.book || (NUMBERED.has(q.book) && k.replace(/^\d/, "") === q.book));
+const chapterHit = (refs, q) => (refs || []).some(([k, c]) => sameBook(k, q) && c === q.c);
 function refScore(refs, q){
   let best = 0;
   for (const [k, c, v1, v2] of refs || []){
-    const same = q.num ? k === q.num + q.book : (k === q.book || (NUMBERED.has(q.book) && k.replace(/^\d/, "") === q.book));
-    if (!same) continue;
+    if (!sameBook(k, q)) continue;
     let s = 0;
     if (q.c === null) s = 45;
     else if (c === q.c){
@@ -420,7 +424,7 @@ function search(q){
   const useWords = !col && fq.length > 1 && !(isId && id.length < 4) && !(bq && bq.c !== null) && !(issue && issue.n);
   const groups = useWords ? fq.split(" ").filter(w => w.length > 1).map(w => [w, ...synFor(w)]) : [];
   const allIn = hay => groups.length > 0 && groups.every(g => g.some(n => hay.includes(n)));
-  const res = [];
+  const res = [], nearby = [];
   for (const it of INDEX){
     if (!passes(it)) continue;
     let score = 0; const m = {cols:new Set(), printed:false, pelt:false};
@@ -446,9 +450,15 @@ function search(q){
       else if (allIn(it.words)) score = Math.max(score, 20);
     }
     if (score) res.push({it, score, m});
+    else if (bq && bq.v1 !== null){
+      m.printed = chapterHit(it.a.b, bq); m.pelt = chapterHit(it.pb, bq);
+      if (m.printed || m.pelt) nearby.push({it, score:10, m});
+    }
   }
+  const near = !res.length && nearby.length > 0;
+  if (near) res.push(...nearby);
   res.sort((a, b) => b.score - a.score || a.it.i - b.it.i);
-  return {res, needles: groups.flat()};
+  return {res, needles: groups.flat(), near};
 }
 
 function hl(text, needles){
@@ -507,15 +517,15 @@ function card(r, needles){
 let LIMIT = 40;
 function run(){
   const q = $q.value, t = T[L];
-  let res, needles;
+  let res, needles, near = false;
   if (!q.trim()){
     if (!$fa.value && !$fy.value){
       $count.textContent = "";
       $out.innerHTML = ""; saveUrl(); return;
     }
     res = INDEX.filter(passes).map(it => ({it, score:1, m:{cols:new Set()}})); needles = [];
-  } else ({res, needles} = search(q));
-  $count.textContent = res.length ? t.count(res.length) : "";
+  } else ({res, needles, near} = search(q));
+  $count.textContent = res.length ? (near ? NEAR[L] + " " : "") + t.count(res.length) : "";
   $out.innerHTML = res.length
     ? res.slice(0, LIMIT).map(r => card(r, needles)).join("") + (res.length > LIMIT ? `<button class="more" id="more">${t.more(res.length - LIMIT)}</button>` : "")
     : `<div class="empty">${esc(t.none(q || "–"))}</div>`;
